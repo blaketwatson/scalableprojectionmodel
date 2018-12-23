@@ -1,0 +1,250 @@
+#include "stdafx.h"
+#include <fstream>
+#include <ctime>
+#include <iostream>
+#include <thread>
+#include <vector>
+
+
+#define PI 3.14159265358979324
+
+#define DRAG 0.47
+#define AIR_DENSE 1.225//kg/m^3
+#define X_AREA 0.15//m^2
+#define MASS 40//kg
+
+
+using namespace std;
+
+int actualize_index(int i0, int i1, int i2, int i3)
+{
+	return ((((i0 * 17) + i1) * 21) + i2 * 36) + i3;
+}
+
+//angle unit conversion functions
+double deg_to_rad(double degrees)
+{
+	return PI * degrees / 180.0;
+}
+double rad_to_deg(double radians)
+{
+	return 180.0 * radians / PI;
+}
+
+//vector addition and subtraction and multiplication
+vector<double> vector_add(vector<double> vector1, vector<double> vector2)
+{
+	vector<double> result;
+	for (int i = 0; i < vector1.size(); i++)
+		result.push_back(vector1[i] + vector2[i]);
+	return result;
+}
+vector<double> vector_subtract(vector<double> vector1, vector<double> vector2)
+{
+	vector<double> result;
+	for (int i = 0; i < vector1.size(); i++)
+		result.push_back(vector1[i] - vector2[i]);
+	return result;
+}
+vector<double> scalar_multiplication(double scalar, vector<double> vector1)
+{
+	vector<double> result;
+	for (int i = 0; i < vector1.size(); i++)
+		result.push_back(vector1[i] * scalar);
+	return result;
+}
+
+//returns magnitude of vector
+double magnitude(vector<double> vector1)
+{
+	double square_sum = 0.0;
+	for (int i = 0; i < vector1.size(); i++)
+		square_sum += pow(vector1[i], 2);
+	return pow(square_sum, 0.5);
+}
+
+//normalized vector (magnitude == 1)
+vector<double> normalize(vector<double> vector1)
+{
+	vector<double> result;
+	double size = magnitude(vector1);
+	for (int i = 0; i < vector1.size(); i++)
+		result.push_back(vector1[i] / size);
+	return result;
+}
+
+void motion_calculation(double launch_angle, double initial_velocity, double wind_speed, double wind_direction, double& air_times, double& ranges, double& landing_direction)
+{
+	//x-component is horizontal velocity along the original launch path
+	//y-component is horizontal velocity perpendicular to original launch path
+	//z-component is vertical velocity
+	vector<double> velocity{ 0, 0, 0 };
+	vector<double> position{ 0, 0, 0 };
+	vector<double> wind{ 0, 0, 0 };
+	vector<double> acceleration;
+
+	velocity[0] = initial_velocity * cos(deg_to_rad(launch_angle));//sets x-velocity m/s
+	velocity[2] = initial_velocity * sin(deg_to_rad(launch_angle));//sets z-velocity m/s
+	double speed = initial_velocity;//sets velocity
+
+	wind[0] = wind_speed * cos(deg_to_rad(wind_direction));//sets x-velocity m/s
+	wind[1] = wind_speed * sin(deg_to_rad(wind_direction));//sets y-velocity m/s
+
+	double accel_drag; //initialization: how much speed lost due to drag
+
+	air_times = 0;
+	double dt = 0.000001;
+
+	do
+	{
+		//takes care of position change using velocity
+		position = vector_add(position, scalar_multiplication(dt, velocity));
+		air_times += dt;
+
+		//defines acceleration due to drag and gravity
+		vector<double> wind_relative_velocity = vector_subtract(wind, velocity);
+		accel_drag = 0.5 * DRAG * AIR_DENSE * X_AREA * pow(magnitude(wind_relative_velocity), 2) / MASS;
+		acceleration = scalar_multiplication(accel_drag, normalize(wind_relative_velocity));
+		acceleration[2] -= 9.8;
+
+		//changes velocity due to acceleration
+		velocity = vector_add(velocity, scalar_multiplication(dt, acceleration));
+	} while (position[2] > 0);//repeat while hasn't hit ground yet
+	position.pop_back();
+	ranges = magnitude(position);
+	landing_direction = rad_to_deg(atan2(position[1], position[0]));
+}
+
+int main()
+{
+	//to time how long the program takes to run
+	clock_t begin, end;
+	begin = clock();
+
+	//initial variables
+	double launch_angle[17];//degrees
+	for (int i = 0; i < 17; i++)
+		launch_angle[i] = (i + 1) * 5;//degrees 5 to 85, step = 5
+
+	double initial_velocity[17];//m/s
+	for (int i = 0; i < 17; i++)
+		initial_velocity[i] = i * 5 + 10;//speeds 10 to 90, step = 5
+
+	double wind_speed[21];//m/s
+	for (int i = 0; i < 21; i++)
+		wind_speed[i] = i;//speeds 0 to 20, step = 1
+
+	double wind_direction[36];//degrees
+	for (int i = 0; i < 36; i++)
+		wind_direction[i] = 180 * i / 35.0;//degrees 0 to 180, step = 5.142857
+
+
+	//data storage
+	double* air_times = new double[17 * 17 * 21 * 40];//how long the object is in the air
+	double* ranges = new double[17 * 17 * 21 * 40];//how far landing site is from launching site
+	double* landing_direction = new double[17 * 17 * 21 * 40];//direction of landing site from launching site
+
+	int counter = 0;
+	for (int i0 = 0; i0 < 17; i0++)//iterates through all launch angles
+	{
+		for (int i1 = 0; i1 < 17; i1++)//iterates through all launch speeds
+		{
+			for (int i2 = 0; i2 < 21; i2++)//iterates through all wind speeds
+			{
+				for (int i3 = 0; i3 < 6; i3++)//iterates through all wind angles
+				{
+					//creates 6 threads
+					int index1 = actualize_index(i0, i1, i2, i3);
+					int index2 = actualize_index(i0, i1, i2, i3 + 6);
+					int index3 = actualize_index(i0, i1, i2, i3 + 12);
+					int index4 = actualize_index(i0, i1, i2, i3 + 18);
+					int index5 = actualize_index(i0, i1, i2, i3 + 24);
+					int index6 = actualize_index(i0, i1, i2, i3 + 30);
+					thread t1(motion_calculation, launch_angle[i0], initial_velocity[i1], wind_speed[i2], wind_direction[i3],
+						ref(air_times[index1]), ref(ranges[index1]), ref(landing_direction[index1]));
+					thread t2(motion_calculation, launch_angle[i0], initial_velocity[i1], wind_speed[i2], wind_direction[i3 + 5],
+						ref(air_times[index2]), ref(ranges[index2]), ref(landing_direction[index2]));
+					thread t3(motion_calculation, launch_angle[i0], initial_velocity[i1], wind_speed[i2], wind_direction[i3 + 10],
+						ref(air_times[index3]), ref(ranges[index3]), ref(landing_direction[index3]));
+					thread t4(motion_calculation, launch_angle[i0], initial_velocity[i1], wind_speed[i2], wind_direction[i3 + 15],
+						ref(air_times[index4]), ref(ranges[index4]), ref(landing_direction[index4]));
+					thread t5(motion_calculation, launch_angle[i0], initial_velocity[i1], wind_speed[i2], wind_direction[i3 + 20],
+						ref(air_times[index5]), ref(ranges[index5]), ref(landing_direction[index5]));
+					thread t6(motion_calculation, launch_angle[i0], initial_velocity[i1], wind_speed[i2], wind_direction[i3 + 25],
+						ref(air_times[index6]), ref(ranges[index6]), ref(landing_direction[index6]));
+					{
+						t1.join();
+						cout << ++counter / 2184.14 << "% [" << counter << " out of 218,484]: " << (static_cast<double>(clock()) - static_cast<double>(begin)) / CLOCKS_PER_SEC << " seconds" << endl;
+					}
+					if (t2.joinable())
+					{
+						t2.join();
+						cout << ++counter / 2184.14 << "% [" << counter << " out of 218,484]: " << (static_cast<double>(clock()) - static_cast<double>(begin)) / CLOCKS_PER_SEC << " seconds" << endl;
+					}
+					if (t3.joinable())
+					{
+						t3.join();
+						cout << ++counter / 2184.14 << "% [" << counter << " out of 218,484]: " << (static_cast<double>(clock()) - static_cast<double>(begin)) / CLOCKS_PER_SEC << " seconds" << endl;
+					}
+					if (t4.joinable())
+					{
+						t4.join();
+						cout << ++counter / 2184.14 << "% [" << counter << " out of 218,484]: " << (static_cast<double>(clock()) - static_cast<double>(begin)) / CLOCKS_PER_SEC << " seconds" << endl;
+					}
+					if (t5.joinable())
+					{
+						t5.join();
+						cout << ++counter / 2184.14 << "% [" << counter << " out of 218,484]: " << (static_cast<double>(clock()) - static_cast<double>(begin)) / CLOCKS_PER_SEC << " seconds" << endl;
+					}
+					if (t6.joinable())
+					{
+						t6.join();
+						cout << ++counter / 2184.14 << "% [" << counter << " out of 218,484]: " << (static_cast<double>(clock()) - static_cast<double>(begin)) / CLOCKS_PER_SEC << " seconds" << endl;
+					}
+				}
+			}
+		}
+	}
+	
+	//saves data to Comma Separated Values (CSV) files; open with Excel
+	ofstream output1("C:\\Users\\Brad Zhang\\Desktop\\SuperComputing\\ranges.csv");
+	ofstream output2("C:\\Users\\Brad Zhang\\Desktop\\SuperComputing\\landing_direction.csv");
+	ofstream output3("C:\\Users\\Brad Zhang\\Desktop\\SuperComputing\\air_times.csv");
+	for (int i0 = 0; i0 < 17; i0++)
+	{
+		for (int i1 = 0; i1 < 17; i1++)
+		{
+			for (int i2 = 0; i2 < 21; i2++)
+			{
+				for (int i3 = 0; i3 < 36; i3++)
+				{
+					output1 << ranges[actualize_index(i0, i1, i2, i3)] << ",";
+					output2 << landing_direction[actualize_index(i0, i1, i2, i3)] << ",";
+					output3 << air_times[actualize_index(i0, i1, i2, i3)] << ",";
+				}
+				output1 << "\n";
+				output2 << "\n";
+				output3 << "\n";
+			}
+			output1 << "\n\n\n";
+			output2 << "\n\n\n";
+			output3 << "\n\n\n";
+		}
+		output1 << "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
+		output2 << "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
+		output3 << "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
+	}
+	output1.close();
+	output2.close();
+	output3.close();
+	
+	//end the timer
+	end = clock();
+	//print the time the program took
+	double time = (static_cast<double>(end) - static_cast<double>(begin)) / CLOCKS_PER_SEC;
+	cout << time << endl;
+	delete[] air_times;
+	delete[] ranges;
+	delete[] landing_direction;
+	return 0;
+}
